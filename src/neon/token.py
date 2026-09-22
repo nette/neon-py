@@ -1,13 +1,17 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Iterator, Sequence
 from dataclasses import dataclass
-from typing import Self
+from typing import TYPE_CHECKING, Self
 
 from ._journal import record
-from .position import Position
+from .position import Cursor, Position
 from .scanner import Scanner, TokenKind, TriviaKind
+
+if TYPE_CHECKING:
+    from .nodes import Node
+
 
 _WHITESPACE = re.compile(r"(?:[ \t]|\r(?!\n))+")
 _COMMENT = re.compile(r"#[^\n]*")
@@ -66,12 +70,13 @@ class Trivia:
 class Token:
     """A token of the source with the trivia around it."""
 
-    __slots__ = ("_kind", "_leading", "_origin", "_text", "_trailing")
+    __slots__ = ("_kind", "_leading", "_origin", "_parent", "_text", "_trailing")
 
     _kind: TokenKind
     _text: str
     _leading: tuple[Trivia, ...]
     _trailing: tuple[Trivia, ...]
+    _parent: Node | None
     _origin: Position | None
 
     def __init__(
@@ -127,6 +132,7 @@ class Token:
         self._leading = leading
         self._trailing = trailing
         self._origin = origin
+        self._parent = None
 
     @property
     def kind(self) -> TokenKind:
@@ -150,6 +156,10 @@ class Token:
     def trailing_trivia(self) -> tuple[Trivia, ...]:
         return self._trailing
 
+    @property
+    def parent(self) -> Node | None:
+        return self._parent
+
     def set_text(self, text: str) -> Self:
         """Replaces the text by another one of the same kind."""
         _check_text(self._kind, text)
@@ -159,12 +169,40 @@ class Token:
         return self
 
     def set_leading_trivia(self, trivia: Iterable[Trivia]) -> Self:
-        """Sets the leading trivia, in the canonical form."""
-        return self._set_leading(tuple(trivia))
+        """Sets the leading trivia; in a document also checks them against the token before."""
+        trivia = tuple(trivia)
+        _check_trivia(trivia, leading=True, end_of_file=self.is_(TokenKind.END_OF_FILE))
+        before, _ = _neighbours(self)
+        if before and trivia and not _has_line_ending(before.trailing_trivia):
+            raise ValueError(
+                "Leading trivia must follow a line ending; on the same line they are"
+                " the trailing trivia of the token before."
+            )
+        if before and trivia and trivia[0].kind == TriviaKind.BYTE_ORDER_MARK:
+            raise ValueError(
+                "A byte order mark may only stand at the start of the input."
+            )
+        return self._set_leading(trivia)
 
     def set_trailing_trivia(self, trivia: Iterable[Trivia]) -> Self:
-        """Sets the trailing trivia, in the canonical form."""
-        return self._set_trailing(tuple(trivia))
+        """Sets the trailing trivia; in a document also checks them against the token after."""
+        trivia = tuple(trivia)
+        _check_trivia(
+            trivia, leading=False, end_of_file=self.is_(TokenKind.END_OF_FILE)
+        )
+        _, after = _neighbours(self)
+        if after and after.leading_trivia and not _has_line_ending(trivia):
+            raise ValueError(
+                "Trailing trivia without a line ending must not be followed by leading trivia."
+            )
+        if (
+            after
+            and not after.is_(TokenKind.END_OF_FILE)
+            and trivia
+            and trivia[-1].kind == TriviaKind.COMMENT
+        ):
+            raise ValueError("A comment must be followed by a line ending.")
+        return self._set_trailing(trivia)
 
     def replace_trivia(self, old: Trivia, replacement: Trivia) -> Self:
         """Replaces a trivia, found by identity, in the leading or trailing trivia."""
@@ -192,6 +230,20 @@ class Token:
         return Token._trusted(
             self._kind, self._text, self._leading, self._trailing, self._origin
         )
+
+    def get_position(self) -> Position | None:
+        """The current position, computed by a walk from the root; None in a detached subtree."""
+        root = _root_of(self)
+        if root is None:
+            return None
+        parts: list[str] = []
+        for token in root.get_tokens():
+            if token is self:
+                parts.extend(t.text for t in self._leading)
+                text = "".join(parts)
+                return Cursor(text).at(len(text))
+            parts.append(str(token))
+        return None
 
     def __str__(self) -> str:
         """The source text of the token with its trivia."""
@@ -227,6 +279,11 @@ class Token:
         """For a token made from a text that is not the source of the document."""
         self._origin = None
 
+    def _set_parent(self, parent: Node | None) -> None:
+        old = self._parent
+        record(lambda: setattr(self, "_parent", old))
+        self._parent = parent
+
 
 def _check_text(kind: TokenKind, text: str) -> None:
     if not is_well_formed(text) or (
@@ -235,6 +292,51 @@ def _check_text(kind: TokenKind, text: str) -> None:
         else _scan_single_token(text) != kind
     ):
         raise ValueError(f"{text!r} is not one token of kind {kind}.")
+
+
+def _root_of(token: Token) -> Node | None:
+    """The document the token stands in, or None."""
+    from .nodes import DocumentNode
+
+    node = token.parent
+    while node is not None and node.parent is not None:
+        node = node.parent
+    return node if isinstance(node, DocumentNode) else None
+
+
+def _neighbours(token: Token) -> tuple[Token | None, Token | None]:
+    """The tokens before and after one in a document; none when it is not in a document."""
+    if _root_of(token) is None:
+        return None, None
+    return find_neighbour(token, backward=True), find_neighbour(token, backward=False)
+
+
+def find_neighbour(token: Token, *, backward: bool) -> Token | None:
+    """The token of the tree right before or after one."""
+    return next(iterate_neighbours(token, backward=backward), None)
+
+
+def iterate_neighbours(token: Token, *, backward: bool) -> Iterator[Token]:
+    """The tokens of the tree before or after one, the nearest first."""
+    child: Node | Token = token
+    node = token.parent
+    while node is not None:
+        children = node.get_children()
+        i = next(k for k, c in enumerate(children) if c is child)
+        siblings = reversed(children[:i]) if backward else children[i + 1 :]
+        for sibling in siblings:
+            yield from _iterate_tokens(sibling, backward=backward)
+        child = node
+        node = node.parent
+
+
+def _iterate_tokens(node: Node | Token, *, backward: bool) -> Iterator[Token]:
+    if isinstance(node, Token):
+        yield node
+        return
+    children = node.get_children()
+    for child in reversed(children) if backward else children:
+        yield from _iterate_tokens(child, backward=backward)
 
 
 def _check_trivia(
@@ -274,6 +376,10 @@ def _unique_trivia(trivia: tuple[Trivia, ...]) -> tuple[Trivia, ...]:
         seen.add(id(t))
         res.append(t)
     return tuple(res)
+
+
+def _has_line_ending(trivia: Iterable[Trivia]) -> bool:
+    return any(t.kind == TriviaKind.LINE_ENDING for t in trivia)
 
 
 def _scan_single_token(text: str) -> TokenKind | None:
