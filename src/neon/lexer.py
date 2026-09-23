@@ -63,6 +63,17 @@ def tokenize(input: str) -> list[Token]:
     return tokens
 
 
+def decode_utf8(data: bytes) -> str:
+    """Decodes UTF-8; invalid bytes fail with the position of the first of them."""
+    try:
+        return data.decode("utf-8")
+    except UnicodeDecodeError as e:
+        prefix = data[: e.start].decode("utf-8")
+        raise NeonError(
+            "Invalid UTF-8 sequence.", Cursor(prefix).at(len(prefix))
+        ) from None
+
+
 def quote(text: str) -> str:
     """Text quoted by 'Unexpected': 40 code points, a line ending as one, shown as <new line>."""
     return text.replace("\r\n", "\n")[:40].replace("\n", "<new line>")
