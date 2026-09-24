@@ -2,6 +2,7 @@
 
 import sys
 
+from .dumper import dump
 from .errors import NeonError
 from .lexer import decode_utf8, tokenize
 from .nodes import (
@@ -50,6 +51,7 @@ __all__ = [
     "Value",
     "ValueNode",
     "decode_utf8",
+    "dump",
     "locate_all",
     "parse",
     "print_node",

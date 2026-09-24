@@ -4,7 +4,7 @@ import pytest
 from corpus import Case, load_cases, runs_here
 from typed import equal, to_host
 
-from neon import NeonError, parse
+from neon import NeonError, dump, parse
 
 
 def cases(category: str) -> list[Case]:
@@ -37,3 +37,22 @@ def test_errors(case: Case) -> None:
         assert e.position
         actual = f"{e.message}\n{e.position.line}:{e.position.column}\n"
     assert actual == case.read(".error")
+
+
+@pytest.mark.parametrize("case", cases("cst"), ids=ids("cst"))
+def test_cst(case: Case) -> None:
+    text = case.read(".neon")
+    assert text is not None
+    document = parse(text)
+    assert document.print() == text
+    assert dump(document) == case.read(".dump")
+
+
+@pytest.mark.parametrize("case", cases("roundtrip"), ids=ids("roundtrip"))
+def test_roundtrip(case: Case) -> None:
+    text = case.read(".neon")
+    assert text is not None
+    document = parse(text)
+    assert document.print() == text
+    document.to_value()
+    assert dump(document) == case.read(".dump")
