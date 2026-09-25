@@ -3,7 +3,9 @@
 import sys
 
 from .dumper import dump
+from .encoder import BlockFilter, encode
 from .errors import NeonError
+from .facade import decode, decode_file, parse_file
 from .lexer import decode_utf8, tokenize
 from .nodes import (
     ArrayItemNode,
@@ -33,6 +35,7 @@ __all__ = [
     "ArrayItemNode",
     "ArrayNode",
     "BlockArrayNode",
+    "BlockFilter",
     "Date",
     "DocumentNode",
     "Entity",
@@ -50,10 +53,14 @@ __all__ = [
     "TriviaKind",
     "Value",
     "ValueNode",
+    "decode",
+    "decode_file",
     "decode_utf8",
     "dump",
+    "encode",
     "locate_all",
     "parse",
+    "parse_file",
     "print_node",
     "print_text",
     "tokenize",

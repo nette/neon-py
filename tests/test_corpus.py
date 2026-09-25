@@ -1,10 +1,11 @@
 import json
+import re
 
 import pytest
 from corpus import Case, load_cases, runs_here
 from typed import equal, to_host
 
-from neon import NeonError, dump, parse
+from neon import NeonError, dump, encode, parse
 
 
 def cases(category: str) -> list[Case]:
@@ -37,6 +38,23 @@ def test_errors(case: Case) -> None:
         assert e.position
         actual = f"{e.message}\n{e.position.line}:{e.position.column}\n"
     assert actual == case.read(".error")
+
+
+@pytest.mark.parametrize("case", cases("encode"), ids=ids("encode"))
+def test_encode(case: Case) -> None:
+    value = to_host(json.loads(case.read(".json") or ""))
+    indentation = case.meta.get("indentation", "\t")
+    depth = case.meta.get("blockMode", True)
+    block = depth if isinstance(depth, bool) else lambda _, path: len(path) < depth
+    error = case.read(".error")
+    if error is not None:
+        with pytest.raises(NeonError, match=re.escape(error.strip())):
+            encode(value, indentation=indentation)
+        with pytest.raises(NeonError, match=re.escape(error.strip())):
+            encode(value, block, indentation)
+        return
+    assert encode(value, indentation=indentation) == case.read(".neon")
+    assert encode(value, block, indentation) == case.read(".block.neon")
 
 
 @pytest.mark.parametrize("case", cases("cst"), ids=ids("cst"))

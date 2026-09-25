@@ -1,9 +1,10 @@
 import math
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone, tzinfo
 from decimal import Decimal
-from typing import Self
+from typing import NamedTuple, Self
 
 type Value = (
     bool | int | float | str | Date | Entity | list[Value] | dict[str, Value] | None
@@ -171,6 +172,64 @@ def _days_in_month(year: int, month: int) -> int:
 
 def _in_range(n: int | None, low: int, high: int) -> bool:
     return isinstance(n, int) and not isinstance(n, bool) and low <= n <= high
+
+
+def values_equal(a: object, b: object) -> bool:
+    """Equality of values (values.md §1) of a value of the host and a decoded one."""
+    if b is None or isinstance(b, bool | str):
+        return type(a) is type(b) and a == b
+    if isinstance(b, int):
+        return isinstance(a, int) and not isinstance(a, bool) and a == b
+    if isinstance(b, float):
+        return isinstance(a, float) and (a == b or (math.isnan(a) and math.isnan(b)))
+    if isinstance(b, Date):
+        if isinstance(a, date):
+            try:
+                a = Date.from_datetime(a)
+            except ValueError:
+                return False  # a date out of the range of the model equals no date
+        return a == b
+    if isinstance(b, Entity):
+        return (
+            isinstance(a, Entity)
+            and values_equal(a.value, b.value)
+            and values_equal(a.attributes, b.attributes)
+        )
+
+    x = entries_of(a)
+    y = entries_of(b)
+    return (
+        x is not None
+        and y is not None
+        and x.is_list == y.is_list
+        and len(x.entries) == len(y.entries)
+        and all(
+            kx == ky and values_equal(vx, vy)
+            for (kx, vx), (ky, vy) in zip(x.entries, y.entries, strict=True)
+        )
+    )
+
+
+class HostEntries(NamedTuple):
+    """The entries of an array of the host, with canonical keys."""
+
+    entries: list[tuple[str, object]]
+    is_list: bool
+
+
+def entries_of(value: object) -> HostEntries | None:
+    """The entries of a list, a tuple or a mapping; None for anything else."""
+    if isinstance(value, list | tuple):
+        return HostEntries([(str(i), v) for i, v in enumerate(value)], is_list=True)
+    if not isinstance(value, Mapping):
+        return None
+    entries: list[tuple[str, object]] = []
+    for key, v in value.items():
+        if isinstance(key, bool) or not isinstance(key, str | int):
+            return None
+        entries.append((key if isinstance(key, str) else int_text(key), v))
+    is_list = all(key == str(i) for i, (key, _) in enumerate(entries))
+    return HostEntries(entries, is_list=bool(entries) and is_list)
 
 
 _SIMPLE_TYPES: dict[str, bool | None] = {
