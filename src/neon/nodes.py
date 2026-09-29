@@ -2,10 +2,11 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Iterable, Sequence
+from dataclasses import dataclass
 from enum import Enum
-from typing import cast
+from typing import Self, cast
 
-from ._journal import record
+from ._journal import atomic, record
 from .errors import NeonError
 from .position import Position
 from .scanner import TokenKind, TriviaKind
@@ -25,6 +26,16 @@ from .values import (
 )
 
 type Child = Node | Token
+
+
+@dataclass(frozen=True, slots=True)
+class ItemIndex:
+    """A segment of a path that finds an item by its order, not by its key."""
+
+    index: int
+
+
+type PathSegment = str | int | ItemIndex
 
 
 class _Unset(Enum):
@@ -179,6 +190,24 @@ class ValueNode(Node):
     @abstractmethod
     def clone(self) -> ValueNode: ...
 
+    def replace_with(self, node: ValueNode) -> None:
+        """
+        Puts the node into the slot of this one, which decides what that means; the node
+        gets the trivia at the edges of this one in place of its own.
+        """
+        from .editing import replace_node
+
+        with atomic():
+            replace_node(self, node)
+
+    def detach(self) -> Self:
+        """Takes the node out of the tree, with the trivia at its edges; the slot gets None."""
+        from .editing import detach_node
+
+        with atomic():
+            detach_node(self)
+        return self
+
 
 def _adopt[T: Child | None](parent: Node, child: T, previous: Child | None = None) -> T:
     """Puts a child into a slot of the parent and releases the previous one."""
@@ -215,6 +244,14 @@ class DocumentNode(Node):
     def value(self) -> ValueNode | None:
         return self._value
 
+    @value.setter
+    def value(self, node: ValueNode | None) -> None:
+        """The same as set_value([], node): the node takes the place of the root."""
+        from .editing import set_document_node
+
+        with atomic():
+            set_document_node(self, node)
+
     @property
     def end_of_file(self) -> Token:
         return self._end_of_file
@@ -236,6 +273,48 @@ class DocumentNode(Node):
 
     def to_value(self) -> Value:
         return self._value.to_value() if self._value else None
+
+    def find_item(self, path: Sequence[PathSegment]) -> ArrayItemNode | None:
+        """
+        The item at the path of keys, the same keys decode() gives; a path continues into
+        the attributes of an entity.
+        """
+        from .editing import resolve_path
+
+        try:
+            return resolve_path(self, path) if path else None
+        except NeonError:
+            return None
+
+    def set_value(
+        self, path: Sequence[PathSegment], value: object, *, create: bool = True
+    ) -> None:
+        """Writes the value at the path; a missing last key is added, unless create is False."""
+        from .editing import set_by_path
+
+        with atomic():
+            set_by_path(self, path, value, create=create)
+
+    def add_item(
+        self,
+        path: Sequence[PathSegment],
+        value: object,
+        *,
+        key: str | None = None,
+        position: int | None = None,
+    ) -> ArrayItemNode:
+        """Adds an item to the array at the path, without a key unless given one."""
+        from .editing import add_by_path
+
+        with atomic():
+            return add_by_path(self, path, value, key, position)
+
+    def set_key(self, path: Sequence[PathSegment], key: str) -> None:
+        """Renames the key of the item at the path."""
+        from .editing import resolve_path, set_item_key
+
+        with atomic():
+            set_item_key(resolve_path(self, path), key)
 
     def _set_value(self, value: ValueNode | None) -> None:
         """Writes the slot as it is, for an edit that moves the trivia itself."""
@@ -279,6 +358,15 @@ class ArrayNode(ValueNode):
     def find_item(self, key: str | int) -> ArrayItemNode | None:
         """The item with the canonical key, as decode() would find it."""
         return resolve_keys(self._items).get(_key_text(key))
+
+    def add_item(
+        self, value: object, *, key: str | None = None, position: int | None = None
+    ) -> ArrayItemNode:
+        """Adds an item built from the value, at the end or before the item at the position."""
+        from .editing import add_item
+
+        with atomic():
+            return add_item(self, key, value, position)
 
     def to_value(self) -> list[Value] | dict[str, Value]:
         entries = {
@@ -422,6 +510,14 @@ class ArrayItemNode(Node):
     def value(self) -> ValueNode | None:
         return self._value
 
+    @value.setter
+    def value(self, node: ValueNode | None) -> None:
+        """The same as set_value() with a node; None empties the value."""
+        from .editing import set_item_node
+
+        with atomic():
+            set_item_node(self, node)
+
     @property
     def separator(self) -> Token | None:
         return self._separator
@@ -508,6 +604,23 @@ class ArrayItemNode(Node):
         if trivia and trivia[-1].kind == TriviaKind.WHITESPACE:
             return trivia[-1].text
         return ""
+
+    def set_value(self, value: object) -> None:
+        """
+        Writes the value: a value of the host or a node. Writing an equal value changes
+        nothing; a new scalar keeps the style of the old one where it can.
+        """
+        from .editing import set_item_value
+
+        with atomic():
+            set_item_value(self, value)
+
+    def set_key(self, key: str) -> None:
+        """Renames the key."""
+        from .editing import set_item_key
+
+        with atomic():
+            set_item_key(self, key)
 
 
 class EntityNode(ValueNode):

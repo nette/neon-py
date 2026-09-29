@@ -2,10 +2,12 @@
 
 import sys
 
+from .builder import Builder, Place
 from .dumper import dump
 from .encoder import BlockFilter, encode
 from .errors import NeonError
 from .facade import decode, decode_file, parse_file
+from .layout import Layout
 from .lexer import decode_utf8, tokenize
 from .nodes import (
     ArrayItemNode,
@@ -15,8 +17,10 @@ from .nodes import (
     EntityChainNode,
     EntityNode,
     InlineArrayNode,
+    ItemIndex,
     LiteralNode,
     Node,
+    PathSegment,
     StringNode,
     ValueNode,
 )
@@ -36,15 +40,20 @@ __all__ = [
     "ArrayNode",
     "BlockArrayNode",
     "BlockFilter",
+    "Builder",
     "Date",
     "DocumentNode",
     "Entity",
     "EntityChainNode",
     "EntityNode",
     "InlineArrayNode",
+    "ItemIndex",
+    "Layout",
     "LiteralNode",
     "NeonError",
     "Node",
+    "PathSegment",
+    "Place",
     "Position",
     "StringNode",
     "Token",
