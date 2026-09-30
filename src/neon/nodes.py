@@ -406,6 +406,13 @@ class ArrayNode(ValueNode):
         with atomic():
             remove_item(item, comments)
 
+    def insert(self, position: int, item: ArrayItemNode) -> None:
+        """Inserts an item taken out of a tree by remove(), reindented, with its comments."""
+        from .editing import insert_item
+
+        with atomic():
+            insert_item(self, item, position)
+
     def to_value(self) -> list[Value] | dict[str, Value]:
         entries = {
             key: item.get_value() for key, item in resolve_keys(self._items).items()

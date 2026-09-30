@@ -151,12 +151,23 @@ class TestSlots:
         )
 
     def test_a_literal_key_gets_a_space_after_its_colon(self) -> None:
+        # an inserted item has its value on the line of the key
         doc = parse('{"a":b}')
         key = inline_of(doc).items[0].key
         assert key
         key.replace_with(detached("new"))
         assert doc.print() == "{new: b}"
         check_tree(doc)
+
+        source = parse("b:\n  two words\nc: 1\n")
+        item = item_at(source, "b")
+        item.remove()
+        target = parse("E(a: 1)")
+        assert isinstance(target.value, EntityNode)
+        assert target.value.attributes
+        target.value.attributes.insert(0, item)
+        assert target.print() == "E(b: two words, a: 1)"
+        check_tree(target)
 
     def test_slots_that_cannot_be_empty_refuse_detach(self) -> None:
         doc = parse("a: b(1)\n")
@@ -375,6 +386,59 @@ class TestRemovingKeepsTheCommentsOfOthers:
         check_tree(doc)
 
 
+class TestInsertingIntoAnInlineArrayKeepsTheComments:
+    @staticmethod
+    def take(source: str) -> ArrayItemNode:
+        item = item_at(parse(source), "x")
+        item.remove()
+        return item
+
+    COMMENTED = "# belongs to x\nx: 1 # note\n"
+
+    def test_the_comments_of_the_item_become_lines_above_it_or_it_is_refused_on_one_line(
+        self,
+    ) -> None:
+        doc = parse("{\n\ta: 1, b: 2\n}\n")
+        inline_of(doc).insert(1, self.take(self.COMMENTED))
+        assert (
+            doc.print()
+            == "{\n\ta: 1,\n\t# belongs to x\n\t# note\n\tx: 1,\n\tb: 2\n}\n"
+        )
+        check_tree(doc)
+
+        doc = parse("{\n\ta: 1\n}\n")
+        inline_of(doc).insert(
+            0, self.take("x: # after colon\n\t# above the value\n\t1\n")
+        )
+        assert (
+            doc.print()
+            == "{\n\t# after colon\n\t# above the value\n\tx: 1,\n\ta: 1\n}\n"
+        )
+
+        for text in ("{}", "{a: 1}"):
+            target = parse(text)
+            item = self.take(self.COMMENTED)
+            restore = snapshot(target, item)
+            with pytest.raises(
+                NeonError,
+                match=re.escape(
+                    "An item with comments cannot stand in an inline array on one line."
+                ),
+            ):
+                inline_of(target).insert(0, item)
+            restore()
+        doc = parse("{a: 1}")
+        inline_of(doc).insert(1, self.take("x: 1\n"))
+        assert doc.print() == "{a: 1, x: 1}"
+
+    def test_an_item_added_before_another_takes_only_its_preamble(self) -> None:
+        doc = parse("[\n\t# header\n\n\t# about b\n\tb\n]")
+        inline_of(doc).add_item("a", position=0)
+        assert doc.print() == "[\n\t# header\n\n\ta,\n\t# about b\n\tb\n]"
+        inline_of(doc).items[0].remove()
+        assert doc.print() == "[\n\t# header\n\n\t# about b\n\tb\n]"
+
+
 class TestEqualValues:
     @pytest.mark.parametrize(
         ("text", "value"),
@@ -480,6 +544,15 @@ class TestConstruction:
 
         item = item_at(doc, "a").clone()
         assert item.parent is None
+        target = parse("x: 1\n")
+        block_of(target).insert(1, item)
+        assert target.print() == "x: 1\na: b(1, [2]) # c\n"
+        check_tree(target)
+
+        inline = parse("x: [k: 1, l: 2]\n")
+        block_of(target).insert(2, item_at(inline, "x", "k").clone())
+        assert target.print() == "x: 1\na: b(1, [2]) # c\nk: 1\n"
+        check_tree(target)
 
     def test_a_built_token_has_no_origin(self) -> None:
         doc = parse("a: 1\nb: 2\n")
@@ -527,6 +600,59 @@ def test_replace_with_and_detach() -> None:
     detached_list = items.detach()
     assert doc.print() == "a: 2 # one\nb:\n"
     assert detached_list.print() == "[x]\n"  # with the trivia at its edges
+
+
+def test_an_item_moves_to_another_indentation_with_its_comments_and_strings() -> None:
+    lines = [
+        "a:",
+        "\tkeep: 1",
+        "\t# about db",
+        "\tdb:",
+        "\t\thost: x",
+        "\t\tnote: '''",
+        "\t\t\tfirst",
+        "\t\t\t  second",
+        "\t\t'''",
+        "b:",
+        "    x: 1",
+        "",
+    ]
+    doc = parse("\n".join(lines))
+    db = item_at(doc, "a", "db")
+    db.remove()
+    target = item_at(doc, "b").value
+    assert isinstance(target, BlockArrayNode)
+    target.insert(1, db)
+    expected = [
+        "a:",
+        "\tkeep: 1",
+        "b:",
+        "    x: 1",
+        "    # about db",
+        "    db:",
+        "    \thost: x",
+        "    \tnote: '''",
+        "\t\t\tfirst",
+        "\t\t\t  second",
+        "\t\t'''",
+        "",
+    ]
+    assert doc.print() == "\n".join(expected)
+    check_tree(doc)
+    assert doc.to_value() == {
+        "a": {"keep": 1},
+        "b": {"x": 1, "db": {"host": "x", "note": "first\n  second"}},
+    }
+    with pytest.raises(ValueError, match=re.escape("already has a parent")):
+        target.insert(0, item_at(doc, "a", "keep"))
+
+    inline = parse("a: [x, y]\nb: [z]\n")
+    y = item_at(inline, "a", 1)
+    y.remove()
+    holder = item_at(inline, "b").value
+    assert isinstance(holder, InlineArrayNode)
+    holder.insert(0, y)
+    assert inline.print() == "a: [x]\nb: [y, z]\n"
 
 
 def test_an_item_by_its_order_is_never_created() -> None:

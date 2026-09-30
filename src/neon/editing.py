@@ -523,6 +523,116 @@ def _place_in_block(
     block._set_items([*items[:at], item, *items[at:]])
 
 
+def insert_item(array: ArrayNode, item: ArrayItemNode, at: int) -> None:
+    """
+    Inserts an item taken out of a tree, with its comments, reindented to its new place:
+    the common prefix of the indentation of all its lines moves. The lines inside a
+    multiline string are part of its token and its value, so they stay.
+    """
+    if not isinstance(item, ArrayItemNode):
+        raise TypeError("ArrayItemNode expected.")
+    if item.parent is not None:
+        raise ValueError("The item already has a parent, remove() it first.")
+    if (
+        isinstance(at, bool)
+        or not isinstance(at, int)
+        or not 0 <= at <= len(array.items)
+    ):
+        raise IndexError(f"Position {at} is out of the array.")
+    if isinstance(array, InlineArrayNode) and (
+        item.bullet or isinstance(item.value, BlockArrayNode)
+    ):
+        raise NeonError("A block item cannot stand in an inline array.")
+    if isinstance(array, BlockArrayNode) and not item.bullet and not item.key:
+        raise NeonError("An item without a key or a dash cannot stand in a block.")
+    _check_placeable(array, item)
+    key = item.get_key_value()
+    if key is not None and array.find_item(key) is not None:
+        raise NeonError(f"Duplicated key '{key}'")
+    inline = isinstance(array, InlineArrayNode)
+    comments = _edge_comments(item) if inline else []
+    if comments and not (inline and _is_spread(array)):
+        raise NeonError(
+            "An item with comments cannot stand in an inline array on one line."
+        )
+
+    before = _keys_before(array)
+    if isinstance(array, BlockArrayNode):
+        sibling = array.items[min(at, len(array.items) - 1)]
+        indent = Layout.indentation(sibling)
+        eol = Layout.line_ending(sibling)
+        _reindent(item, item.get_indentation(), indent)
+        if item.separator:  # a clone of an item of an inline array, with its comma
+            trailing = _without_trailing_space(
+                _without_line_ending(item.separator.trailing_trivia)
+            )
+            item._set_slots(separator=None)
+            _trail(item.get_last_token(), trailing)
+        last = item.get_last_token()
+        line_ending = Trivia(TriviaKind.LINE_ENDING, eol)
+        _trail(last, [*_without_line_ending(last.trailing_trivia), line_ending])
+        _place_in_block(array, item, at, indent, eol)
+    else:
+        assert isinstance(array, InlineArrayNode)
+        _lead(item.get_first_token(), [])
+        _trail(item.get_last_token(), [])
+        if (
+            item.colon and item.value and _has_line_ending(item.colon.trailing_trivia)
+        ):  # in brackets, a line ending after the colon means null
+            _trail(item.colon, [Trivia(TriviaKind.WHITESPACE, " ")])
+            _lead(item.value.get_first_token(), [])
+        item._set_slots(separator=None)
+        _add_to_inline(array, None, item, at)
+        if comments:
+            _place_comments_above(item, comments)
+    _keep_keys(array, before, keyless=key is None)
+    _guard_dash_subblocks(array)
+
+
+def _edge_comments(item: ArrayItemNode) -> list[Trivia]:
+    """
+    The comments an item owns at its edges, which an inline array cannot keep in place:
+    the comment lines directly above it, the comments between its key and a value on a
+    later line, and the comment on its line.
+    """
+    _, owned = _split_leading(item.get_first_token().leading_trivia)
+    comments = _without_indentation(owned)
+    if item.colon and item.value and _has_line_ending(item.colon.trailing_trivia):
+        comments += [
+            *item.colon.trailing_trivia,
+            *item.value.get_first_token().leading_trivia,
+        ]
+    comments += item.get_last_token().trailing_trivia
+    return [t for t in comments if t.kind == TriviaKind.COMMENT]
+
+
+def _place_comments_above(item: ArrayItemNode, comments: Sequence[Trivia]) -> None:
+    """Writes the comments as lines of their own above the item, in a spread inline array."""
+    first = item.get_first_token()
+    eol = Layout.line_ending(item)
+    before = _token_before(first)  # the opening bracket, or a comma
+    assert before
+    if not _has_line_ending(before.trailing_trivia):
+        parent = item.parent
+        indentation = (
+            _item_indentation(parent) if isinstance(parent, InlineArrayNode) else ""
+        )
+        trailing = _without_trailing_space(before.trailing_trivia)
+        _trail(before, [*trailing, Trivia(TriviaKind.LINE_ENDING, eol)])
+        _lead(first, _indent_trivia(indentation))
+    preamble, owned = _split_leading(first.leading_trivia)
+    indent = _indentation_of(owned)
+    lines = [
+        t
+        for comment in comments
+        for t in (*_indent_trivia(indent), comment, Trivia(TriviaKind.LINE_ENDING, eol))
+    ]
+    _lead(
+        first,
+        [*preamble, *_without_indentation(owned), *lines, *_indent_trivia(indent)],
+    )
+
+
 def _reindent(node: Node, source: str, to: str) -> None:
     """Replaces the indentation prefix of every line of the node, its comment lines too."""
     tokens = node.get_tokens()
