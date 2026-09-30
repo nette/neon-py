@@ -9,6 +9,7 @@ from guarantees import check_tree, snapshot
 from neon import (
     ArrayItemNode,
     BlockArrayNode,
+    CommentPolicy,
     DocumentNode,
     Entity,
     EntityChainNode,
@@ -234,6 +235,14 @@ class TestRoot:
             doc.add_item(path, 1, position=1)
         assert doc.print() == text
 
+    @pytest.mark.parametrize("text", ["[a]\n", "- a\n"])
+    def test_nullable_removes_the_root_of_either_style(self, text: str) -> None:
+        doc = parse(text)
+        doc.nullable = True
+        doc.remove_item([0])
+        assert doc.to_value() is None
+        check_tree(doc)
+
 
 class TestRefusedOperationsChangeNothing:
     def test_an_implicit_key_out_of_range(self) -> None:
@@ -330,6 +339,40 @@ class TestRefusedOperationsChangeNothing:
         expect_refused(
             lambda: doc.add_item(["b"], {1: 1, "1": 2}), NeonError, "twice", doc
         )
+
+
+class TestRemovingKeepsTheCommentsOfOthers:
+    def test_a_block_opened_on_the_line_of_a_dash(self) -> None:
+        dropped = parse("- a: 1\n  # about b\n  b: 2\n")
+        dropped.remove_item([0, "a"])
+        assert dropped.print() == "-\n  # about b\n  b: 2\n"
+        check_tree(dropped)
+
+        moved = parse("- a: 1 # about a\n  b: 2\n")
+        moved.remove_item([0, "a"], comments=CommentPolicy.MOVE_TO_NEXT_TOKEN)
+        assert moved.print() == "-\n  # about a\n  b: 2\n"
+        check_tree(moved)
+
+        plain = parse("- a: 1\n  b: 2\n")
+        plain.remove_item([0, "a"])
+        assert plain.print() == "- b: 2\n"
+
+    @pytest.mark.parametrize(
+        ("text", "path", "output"),
+        [
+            ("[a, b, c]", [1], "[a, c]"),
+            ("[a, b]", [1], "[a]"),
+            ("[a, b,]", [1], "[a,]"),
+            ("[\n\ta,\n\tb\n]", [1], "[\n\ta\n]"),
+            ("[\n\ta, b\n]", [0], "[\n\tb\n]"),
+            ("[x, a # c\n, b]", [1], "[x,\nb]"),
+        ],
+    )
+    def test_an_inline_array(self, text: str, path: list[int], output: str) -> None:
+        doc = parse(text)
+        doc.remove_item(path)
+        assert doc.print() == output
+        check_tree(doc)
 
 
 class TestEqualValues:

@@ -14,6 +14,7 @@ from .nodes import (
     ArrayItemNode,
     ArrayNode,
     BlockArrayNode,
+    CommentPolicy,
     DocumentNode,
     EntityChainNode,
     EntityNode,
@@ -647,6 +648,264 @@ def _is_spread(array: InlineArrayNode) -> bool:
     )
 
 
+# ---- removing
+
+
+def remove_by_path(
+    document: DocumentNode,
+    path: Sequence[PathSegment],
+    comments: CommentPolicy,
+    nullable: bool | None,
+    merge_blank_lines: bool = False,
+) -> None:
+    """Removes the key at the path: the item found, and the items whose value it overwrote."""
+    item = resolve_path(document, path)
+    array = item.parent
+    assert isinstance(array, ArrayNode)
+    if isinstance(path[-1], ItemIndex):
+        remove_item(item, comments, nullable, merge_blank_lines)
+        return
+    keys = item_keys(array.items)
+    key = keys[_index_of(array.items, item)]
+    victims = [other for other, k in zip(array.items, keys, strict=True) if k == key]
+    for victim in reversed(victims):
+        remove_item(victim, comments, nullable, merge_blank_lines)
+
+
+def remove_item(
+    item: ArrayItemNode,
+    comments: CommentPolicy,
+    nullable: bool | None = None,
+    merge_blank_lines: bool = False,
+) -> None:
+    """Removes an item with the comments it owns."""
+    array = item.parent
+    if not isinstance(array, BlockArrayNode | InlineArrayNode):
+        raise NeonError("The item is not in an array.")
+
+    items = array.items
+    index = _index_of(items, item)
+    remaining = [other for other in items if other is not item]
+    owner = array.parent
+    if nullable is not None:
+        leave_null = nullable
+    else:
+        leave_null = isinstance(owner, ArrayItemNode | DocumentNode) and owner.nullable
+    before = _keys_before(array)
+
+    if (
+        isinstance(array, BlockArrayNode)
+        and not remaining
+        and isinstance(owner, DocumentNode)
+    ):
+        _empty_document(owner, item, comments, leave_null)
+        return
+    if isinstance(array, BlockArrayNode):
+        _remove_from_block(item, comments, merge_blank_lines)
+        if not remaining:
+            _empty_block(array, item, leave_null)
+            return
+    else:
+        _remove_from_inline(array, item, index, comments)
+        if not remaining and leave_null and isinstance(owner, ArrayItemNode):
+            array._set_items([])
+            _replace_value(owner, None)
+            return
+        if not remaining and leave_null and isinstance(owner, DocumentNode):
+            array._set_items([])
+            _empty_root(owner)
+            return
+    array._set_items(remaining)
+    _keep_keys(
+        array, before, keyless=True
+    )  # an item removed from a list renumbers the rest
+    _guard_dash_subblocks(array)
+
+
+def _remove_from_block(
+    item: ArrayItemNode, comments: CommentPolicy, merge_blank_lines: bool
+) -> None:
+    preamble, owned = _split_leading(item.get_first_token().leading_trivia)
+    following = _token_after(item.get_last_token())
+    kept = (
+        [*_without_indentation(owned), *_comment_line(item, Layout.indentation(item))]
+        if comments == CommentPolicy.MOVE_TO_NEXT_TOKEN
+        else []
+    )
+    block = item.parent
+    assert isinstance(block, BlockArrayNode)
+    if not _starts_line(item):  # the first item of a block opened on the line of a dash
+        second = block.items[1] if len(block.items) > 1 else None
+        leading = second.get_first_token().leading_trivia if second else ()
+        if second and (kept or any(t.kind == TriviaKind.COMMENT for t in leading)):
+            # the dash ends its line, the comments stay below it
+            owner = block.parent
+            assert isinstance(owner, ArrayItemNode) and owner.bullet
+            line_ending = Trivia(TriviaKind.LINE_ENDING, Layout.line_ending(item))
+            _trail(owner.bullet, [line_ending])
+            _lead(second.get_first_token(), _join_trivia(kept, leading))
+        elif second:  # the next one moves up
+            _lead(second.get_first_token(), [])
+    elif following and merge_blank_lines and not kept:  # the narrower of the gaps stays
+        gap = min(
+            _blank_lines(preamble),
+            _blank_lines(following.leading_trivia, at_start=True),
+        )
+        _lead(
+            following,
+            _join_trivia(
+                _without_blank_lines(preamble, gap),
+                _without_blank_lines(following.leading_trivia, 0, at_start=True),
+            ),
+        )
+    elif following:
+        _lead(following, _join_trivia([*preamble, *kept], following.leading_trivia))
+    if (
+        not _has_line_ending(item.get_last_token().trailing_trivia)
+        and following
+        and following.kind == TokenKind.END_OF_FILE
+        and not preamble
+        and not kept
+    ):
+        before = _token_before(item.get_first_token())
+        if before:  # the file keeps ending without a line ending
+            _trail(before, _without_line_ending(before.trailing_trivia))
+    _lead(
+        item.get_first_token(), owned
+    )  # the item goes with what it owns, for insert()
+
+
+def _comment_line(item: ArrayItemNode, indent: str) -> list[Trivia]:
+    """The comment on the line of the item as a comment line of its own."""
+    for token in item.get_tokens():
+        comment = next(
+            (t for t in token.trailing_trivia if t.kind == TriviaKind.COMMENT), None
+        )
+        if comment:
+            line_ending = Trivia(TriviaKind.LINE_ENDING, Layout.line_ending(item))
+            return [*_indent_trivia(indent), comment, line_ending]
+        if _has_line_ending(token.trailing_trivia):
+            break
+    return []
+
+
+def _empty_block(block: BlockArrayNode, last: ArrayItemNode, leave_null: bool) -> None:
+    """The block lost its last item: an empty inline array takes its place, or null."""
+    owner = block.parent
+    assert isinstance(owner, ArrayItemNode)
+    head = owner.colon or owner.bullet
+    assert head
+    on_dash_line = not _has_line_ending(
+        head.trailing_trivia
+    )  # the line ending was the item's
+    block._set_items([])
+    owner._set_slots(
+        value=None
+    )  # the tokens of the block are gone, the head keeps its line
+    if on_dash_line:
+        _trail(head, last.get_last_token().trailing_trivia)
+    if not leave_null:
+        _replace_value(owner, _empty_array("{}" if last.key else "[]"))
+    _guard_dash_subblocks(owner.parent)
+
+
+def _empty_document(
+    document: DocumentNode,
+    last: ArrayItemNode,
+    comments: CommentPolicy,
+    leave_null: bool,
+) -> None:
+    """The document lost its last item: the empty array, or nothing, keeps what stood above."""
+    preamble, owned = _split_leading(last.get_first_token().leading_trivia)
+    kept = list(preamble)
+    if comments == CommentPolicy.MOVE_TO_NEXT_TOKEN:
+        kept += [*_without_indentation(owned), *_comment_line(last, "")]
+    trailing = last.get_last_token().trailing_trivia
+    block = document.value
+    assert isinstance(block, BlockArrayNode)
+    block._set_items([])
+    if leave_null:
+        document._set_value(None)
+        end = document.end_of_file
+        _lead(end, _join_trivia(kept, end.leading_trivia))
+        return
+    node = _empty_array("{}" if last.key else "[]")
+    _lead(node.get_first_token(), kept)
+    _trail(node.get_last_token(), _without_comment(trailing))  # it went with the item
+    document._set_value(node)
+
+
+def _empty_array(brackets: str) -> ValueNode:
+    return Builder.parse(brackets)
+
+
+def _remove_from_inline(
+    array: InlineArrayNode, item: ArrayItemNode, index: int, comments: CommentPolicy
+) -> None:
+    """
+    Removes an item of an inline array. The item goes with what it owns; the lines around
+    it stay lines: an item that started its line takes the line ending before itself
+    along, one that did not leaves the line ending after itself, and what stood above the
+    next item stays there.
+    """
+    items = array.items
+    following = items[index + 1] if index + 1 < len(items) else None
+    prev = items[index - 1] if index > 0 else None
+    first = item.get_first_token()
+    eol = Layout.line_ending(item)
+    preamble, owned = _split_leading(first.leading_trivia)
+    own_line = _starts_line(item)
+    ends_line = any(_has_line_ending(t.trailing_trivia) for t in item.get_tokens())
+    kept = (
+        [*_without_indentation(owned), *_comment_line(item, "")]
+        if comments == CommentPolicy.MOVE_TO_NEXT_TOKEN
+        else []
+    )
+
+    before = _token_before(
+        first
+    )  # the opening bracket, or the comma of the previous item
+    assert before
+    between: list[Trivia]
+    if following is None and prev and prev.separator and not item.separator:
+        comma = prev.separator  # the comma before the last item goes with it
+        prev._set_slots(separator=None)
+        before = prev.get_last_token()
+        between = [
+            *before.trailing_trivia,
+            *(comma.trailing_trivia if own_line else ()),
+        ]
+    elif own_line or (following and not ends_line):
+        between = list(before.trailing_trivia)
+    else:
+        between = _without_trailing_space(before.trailing_trivia)
+    if not own_line and ends_line:
+        between = [
+            *_without_trailing_space(between),
+            Trivia(TriviaKind.LINE_ENDING, eol),
+        ]
+    between += [*preamble, *kept]
+    if (
+        following and own_line and not ends_line
+    ):  # the next was on the line of the removed
+        between += _indent_trivia(_indentation_of(owned))
+    after = following.get_first_token() if following else array.close_bracket
+    _reattach(before, after, [*between, *after.leading_trivia])
+    item._set_slots(separator=None)  # the comma separated it in this array
+    _lead(first, owned)  # the item goes with what it owns, for insert()
+
+
+def _reattach(before: Token, after: Token, trivia: Sequence[Trivia]) -> None:
+    """Splits the trivia between two tokens: up to the first line ending trailing, the rest leading."""
+    merged = _join_all(trivia)
+    split = next(
+        (i + 1 for i, t in enumerate(merged) if t.kind == TriviaKind.LINE_ENDING),
+        len(merged),
+    )
+    _trail(before, merged[:split])
+    _lead(after, merged[split:])
+
+
 # ---- keys
 
 
@@ -1004,6 +1263,36 @@ def _split_leading(trivia: Sequence[Trivia]) -> tuple[list[Trivia], list[Trivia]
     return preamble, owned
 
 
+def _blank_lines(trivia: Sequence[Trivia], at_start: bool = False) -> int:
+    """Number of blank lines at the end of the trivia, or at their start."""
+    lines = _split_lines(trivia)
+    if not at_start:
+        lines.pop()  # the indentation of the line that follows
+        lines.reverse()
+    count = 0
+    while count < len(lines) and _is_blank_line(lines[count]):
+        count += 1
+    return count
+
+
+def _is_blank_line(line: Sequence[Trivia]) -> bool:
+    kinds = {t.kind for t in line}
+    return TriviaKind.COMMENT not in kinds and TriviaKind.LINE_ENDING in kinds
+
+
+def _without_blank_lines(
+    trivia: Sequence[Trivia], keep: int, at_start: bool = False
+) -> list[Trivia]:
+    """The trivia with only the given number of blank lines left at the end, or at the start."""
+    lines = _split_lines(trivia)
+    blank = _blank_lines(trivia, at_start)
+    if at_start:
+        del lines[keep:blank]
+    else:
+        del lines[len(lines) - 1 - blank + keep : len(lines) - 1]
+    return [t for line in lines for t in line]
+
+
 def _split_lines(trivia: Iterable[Trivia]) -> list[list[Trivia]]:
     """Groups trivia into lines, each ending with its line ending; the last group has none."""
     lines: list[list[Trivia]] = [[]]
@@ -1025,6 +1314,15 @@ def _without_trailing_space(trivia: Sequence[Trivia]) -> list[Trivia]:
     if trivia and trivia[-1].kind == TriviaKind.WHITESPACE:
         return list(trivia[:-1])
     return list(trivia)
+
+
+def _without_comment(trivia: Sequence[Trivia]) -> list[Trivia]:
+    """The trivia without a comment and the space before it."""
+    i = next((k for k, t in enumerate(trivia) if t.kind == TriviaKind.COMMENT), -1)
+    if i < 0:
+        return list(trivia)
+    start = i - 1 if i > 0 and trivia[i - 1].kind == TriviaKind.WHITESPACE else i
+    return _join_all([*trivia[:start], *trivia[i + 1 :]])
 
 
 def _indentation_of(owned: Sequence[Trivia]) -> str:
@@ -1114,3 +1412,7 @@ def _token_after(token: Token) -> Token | None:
 
 def _token_before(token: Token) -> Token | None:
     return find_neighbour(token, backward=True)
+
+
+def _index_of(items: Sequence[object], item: object) -> int:
+    return next(i for i, x in enumerate(items) if x is item)

@@ -3,7 +3,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
-from enum import Enum
+from enum import Enum, StrEnum
 from typing import Self, cast
 
 from ._journal import atomic, record
@@ -26,6 +26,15 @@ from .values import (
 )
 
 type Child = Node | Token
+
+
+class CommentPolicy(StrEnum):
+    """What happens to the comments a removed item owns: on its line and directly above it."""
+
+    DROP = "drop"
+    """The comments that describe the item go with it."""
+    MOVE_TO_NEXT_TOKEN = "move"
+    """The comments stay, above whatever follows."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -233,12 +242,14 @@ def _adopt[T: Child | None](parent: Node, child: T, previous: Child | None = Non
 class DocumentNode(Node):
     """The root of a document."""
 
-    __slots__ = ("_end_of_file", "_value")
+    __slots__ = ("_end_of_file", "_value", "nullable")
 
     def __init__(self, value: ValueNode | None, end_of_file: Token) -> None:
         super().__init__()
         self._value = _adopt(self, value)
         self._end_of_file = _adopt(self, end_of_file)
+        self.nullable = False
+        """Whether removing the last item leaves None instead of an empty collection."""
 
     @property
     def value(self) -> ValueNode | None:
@@ -269,7 +280,9 @@ class DocumentNode(Node):
 
     def clone(self) -> DocumentNode:
         value = self._value.clone() if self._value else None
-        return DocumentNode(value, self._end_of_file.clone())
+        res = DocumentNode(value, self._end_of_file.clone())
+        res.nullable = self.nullable
+        return res
 
     def to_value(self) -> Value:
         return self._value.to_value() if self._value else None
@@ -308,6 +321,20 @@ class DocumentNode(Node):
 
         with atomic():
             return add_by_path(self, path, value, key, position)
+
+    def remove_item(
+        self,
+        path: Sequence[PathSegment],
+        *,
+        comments: CommentPolicy = CommentPolicy.DROP,
+        nullable: bool | None = None,
+        merge_blank_lines: bool = False,
+    ) -> None:
+        """Removes the item at the path with the comments it owns."""
+        from .editing import remove_by_path
+
+        with atomic():
+            remove_by_path(self, path, comments, nullable, merge_blank_lines)
 
     def set_key(self, path: Sequence[PathSegment], key: str) -> None:
         """Renames the key of the item at the path."""
@@ -367,6 +394,17 @@ class ArrayNode(ValueNode):
 
         with atomic():
             return add_item(self, key, value, position)
+
+    def remove_item(
+        self, item: ArrayItemNode, comments: CommentPolicy = CommentPolicy.DROP
+    ) -> None:
+        """Removes the item with the comments it owns."""
+        from .editing import remove_item
+
+        if item.parent is not self:
+            raise ValueError("The item is not in this array.")
+        with atomic():
+            remove_item(item, comments)
 
     def to_value(self) -> list[Value] | dict[str, Value]:
         entries = {
@@ -477,7 +515,7 @@ class InlineArrayNode(ArrayNode):
 class ArrayItemNode(Node):
     """An item of an array: `- value`, `key: value`, or an item in brackets."""
 
-    __slots__ = ("_bullet", "_colon", "_key", "_separator", "_value")
+    __slots__ = ("_bullet", "_colon", "_key", "_separator", "_value", "nullable")
 
     def __init__(
         self,
@@ -493,6 +531,8 @@ class ArrayItemNode(Node):
         self._colon = _adopt(self, colon)
         self._value = _adopt(self, value)
         self._separator = _adopt(self, separator)
+        self.nullable = False
+        """Whether removing the last item of the value leaves None, not an empty collection."""
 
     @property
     def bullet(self) -> Token | None:
@@ -578,13 +618,15 @@ class ArrayItemNode(Node):
         return cast(Token, self._colon or self._bullet)
 
     def clone(self) -> ArrayItemNode:
-        return ArrayItemNode(
+        res = ArrayItemNode(
             self._bullet.clone() if self._bullet else None,
             self._key.clone() if self._key else None,
             self._colon.clone() if self._colon else None,
             self._value.clone() if self._value else None,
             self._separator.clone() if self._separator else None,
         )
+        res.nullable = self.nullable
+        return res
 
     def get_key_value(self) -> str | None:
         """The canonical key, or None for an item without a key."""
@@ -621,6 +663,17 @@ class ArrayItemNode(Node):
 
         with atomic():
             set_item_key(self, key)
+
+    def remove(
+        self,
+        comments: CommentPolicy = CommentPolicy.DROP,
+        merge_blank_lines: bool = False,
+    ) -> None:
+        """Removes the item from its array, with the comments it owns."""
+        from .editing import remove_item
+
+        with atomic():
+            remove_item(self, comments, None, merge_blank_lines)
 
 
 class EntityNode(ValueNode):
