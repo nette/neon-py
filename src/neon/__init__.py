@@ -30,6 +30,7 @@ from .position import Position
 from .printer import locate_all, print_node, print_text
 from .scanner import TokenKind, TriviaKind
 from .token import Token, Trivia
+from .traverser import TraverseAction, Traverser, Visitor, VisitResult
 from .values import CHAIN, MAX_DEPTH, Date, Entity, Value
 
 # arrays nest 500 levels deep, and walking such a tree takes more frames than the default
@@ -60,10 +61,14 @@ __all__ = [
     "StringNode",
     "Token",
     "TokenKind",
+    "TraverseAction",
+    "Traverser",
     "Trivia",
     "TriviaKind",
     "Value",
     "ValueNode",
+    "VisitResult",
+    "Visitor",
     "decode",
     "decode_file",
     "decode_utf8",
