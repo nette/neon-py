@@ -6,7 +6,24 @@ license = "MIT"
 license-files = ["license.md"]
 authors = [{ name = "David Grudl" }]
 requires-python = ">=3.13"
+keywords = ["neon", "nette", "parser", "config", "format-preserving", "round-trip", "cst"]
+classifiers = [
+	"Development Status :: 4 - Beta",
+	"Intended Audience :: Developers",
+	"Programming Language :: Python :: 3",
+	"Programming Language :: Python :: 3.13",
+	"Programming Language :: Python :: 3.14",
+	"Topic :: Software Development :: Libraries",
+	"Typing :: Typed",
+]
 dependencies = []
+
+[project.urls]
+Homepage = "https://neon.nette.org"
+Repository = "https://github.com/nette/neon-py"
+
+[project.scripts]
+neon-lint = "neon.lint:main"
 
 [build-system]
 requires = ["hatchling"]
