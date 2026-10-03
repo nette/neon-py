@@ -38,4 +38,4 @@ the promise of this library. On the command line the same runs as `neon-lint con
 environment where the package is installed, or `uvx --from nette-neon neon-lint config/`.
 
 For an AI agent editing configuration, this is the check to give it: after every edit of a
-`.neon` file, run `neon-lint` and hand a finding back as an error.
+`.neon` file, run `neon-lint` and hand a finding back as an error. See `docs/skills/agents.md`.
