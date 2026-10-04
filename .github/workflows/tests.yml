@@ -27,5 +27,6 @@ jobs:
       - run: uv run ruff format --check
       - run: uv run ty check
       - run: uv run pytest -q
+      - run: uv run python examples/verify.py
       - run: uv run python tests/smoke.py
       - run: uv run neon-lint --check tests/neon-spec/corpus/roundtrip tests/neon-spec/corpus/decode

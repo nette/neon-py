@@ -14,4 +14,5 @@ A tool that survives only tidy input is not a tool.
 | [edge-cases](edge-cases/) | BOM, CRLF, dash subblocks, multiline strings and the other corners of the format |
 | [linting](linting/) | `neon-lint` for editors, CI and AI agents |
 
-Run any of them with `uv run python examples/<chapter>/<file>.py`.
+Run any of them with `uv run python examples/<chapter>/<file>.py`. `uv run python
+examples/verify.py` runs them all and compares their output with the readmes.
