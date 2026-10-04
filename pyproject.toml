@@ -2,6 +2,7 @@
 name = "nette-neon"
 version = "0.1.0"
 description = "NEON parser, encoder and lossless editor: change a value in a config file and keep its comments and formatting."
+readme = "readme.md"
 license = "MIT"
 license-files = ["license.md"]
 authors = [{ name = "David Grudl" }]
@@ -37,6 +38,9 @@ dev = ["pytest>=9", "ruff>=0.16", "ty>=0.0.84"]
 
 [tool.ruff]
 target-version = "py313"
+
+[tool.ruff.format]
+exclude = ["*.md"]  # the comments of the samples in readmes are aligned by hand
 
 [tool.ruff.lint]
 extend-select = ["B", "C4", "I", "PIE", "RET", "RUF", "SIM", "UP"]
