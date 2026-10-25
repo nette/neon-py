@@ -1,6 +1,6 @@
 [project]
 name = "nette-neon"
-version = "0.1.0"
+version = "1.0.0"
 description = "NEON parser, encoder and lossless editor: change a value in a config file and keep its comments and formatting."
 readme = "readme.md"
 license = "MIT"
