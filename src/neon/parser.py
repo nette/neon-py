@@ -251,23 +251,37 @@ class _Parser:
         end = _PAIRS[opening.kind]
         items: list[ArrayItemNode] = []
         keys = _KeyCheck(self)
+        # the key and the colon of the next item, read on the line after a key without a value
+        pending: tuple[ValueNode, Token] | None = None
 
         while True:
-            self._skip_newlines()
-            closing = self._consume_token(end)
-            if closing:
-                return InlineArrayNode(opening, items, closing)
+            if pending:
+                head, colon = pending
+                pending = None
+            else:
+                self._skip_newlines()
+                closing = self._consume_token(end)
+                if closing:
+                    return InlineArrayNode(opening, items, closing)
+                head = self._parse_value()
+                colon = self._consume_colon()
 
-            head = self._parse_value()
-            colon = self._consume_token(TokenKind.COLON, TokenKind.EQUALS)
             if colon:
                 key = keys.add(head)
-                missing = self.is_next(NEWLINE, TokenKind.COMMA, end)
-                value = None if missing else self._parse_value()
+                value = None
+                line_end = self._consume_newline()
+                if not self.is_next(TokenKind.COMMA, end):
+                    value = self._parse_value()
+                    next_colon = self._consume_colon() if line_end else None
+                    if next_colon:
+                        pending = (value, next_colon)
+                        value = None
                 item = keys.item(None, key, colon, value)
             else:
                 item = keys.item(None, None, None, head)
             items.append(item)
+            if pending:
+                continue
 
             before = self._mark()
             self._skip_newlines()
@@ -278,6 +292,16 @@ class _Parser:
                 continue
             if not self.is_next(end):
                 self.error()
+
+    def _consume_colon(self) -> Token | None:
+        """The colon or the equals sign after a key in an inline array, which may stand on a later line."""
+        mark = self._mark()
+        self._skip_newlines()
+        colon = self._consume_token(TokenKind.COLON, TokenKind.EQUALS)
+        if not colon:
+            self._i = mark.i
+            self._newline_taken = mark.newline_taken
+        return colon
 
     def _enter(self, token: Token) -> None:
         """One level deeper into arrays."""

@@ -63,24 +63,30 @@ def set_item_value(item: ArrayItemNode, value: object) -> None:
     else:
         node = _styled_scalar(old, value)
         _replace_value(item, node or Builder.value(value, _place_of(item, old, value)))
-    _guard_dash_subblocks(item.parent)
+    _guard_grammar(item.parent)
 
 
 def set_item_node(item: ArrayItemNode, node: ValueNode | None) -> None:
     """Puts the node into the value slot or empties it, without comparing and styling."""
     _replace_value(item, node)
-    _guard_dash_subblocks(item.parent)
+    _guard_grammar(item.parent)
 
 
-def _guard_dash_subblocks(block: Node | None) -> None:
+def _guard_grammar(array: Node | None) -> None:
+    """Repairs what the grammar would read differently in the array after an edit."""
+    if isinstance(array, BlockArrayNode):
+        _guard_end(array)
+        _guard_dash_subblocks(array)
+    elif isinstance(array, InlineArrayNode):
+        _guard_keys_without_value(array)
+
+
+def _guard_dash_subblocks(block: BlockArrayNode) -> None:
     """
     A dash right after a key at the same indentation reads as a dash subblock of that
     key. So a key without a value followed by a dash gets an explicit null, and a dash
     right after a dash subblock gets its key written out, which ends the subblock.
     """
-    if not isinstance(block, BlockArrayNode):
-        return
-    _guard_end(block)
     items = block.items
     for i, item in enumerate(items[:-1]):
         following = items[i + 1]
@@ -92,6 +98,19 @@ def _guard_dash_subblocks(block: Node | None) -> None:
             item.value.items[0]
         ) == Layout.indentation(item):
             _give_key(following, item_keys(block.items)[i + 1])
+
+
+def _guard_keys_without_value(array: InlineArrayNode) -> None:
+    """Keeps an item without a key from reading as the value of a key without a value on the line above."""
+    items = array.items
+    for i, item in enumerate(items[:-1]):
+        if (
+            item.key is not None
+            and item.value is None
+            and item.separator is None
+            and items[i + 1].key is None
+        ):
+            _replace_value(item, _literal("null"))
 
 
 def _guard_end(at: Node) -> None:
@@ -369,7 +388,7 @@ def add_item(
         assert isinstance(array, InlineArrayNode)
         item = _add_to_inline(array, key, value, at)
     _keep_keys(array, before, keyless=key is None)
-    _guard_dash_subblocks(array)
+    _guard_grammar(array)
     return item
 
 
@@ -586,7 +605,7 @@ def insert_item(array: ArrayNode, item: ArrayItemNode, at: int) -> None:
         if comments:
             _place_comments_above(item, comments)
     _keep_keys(array, before, keyless=key is None)
-    _guard_dash_subblocks(array)
+    _guard_grammar(array)
 
 
 def _edge_comments(item: ArrayItemNode) -> list[Trivia]:
@@ -829,7 +848,7 @@ def remove_item(
     _keep_keys(
         array, before, keyless=True
     )  # an item removed from a list renumbers the rest
-    _guard_dash_subblocks(array)
+    _guard_grammar(array)
 
 
 def _remove_from_block(
@@ -916,7 +935,7 @@ def _empty_block(block: BlockArrayNode, last: ArrayItemNode, leave_null: bool) -
         _trail(head, last.get_last_token().trailing_trivia)
     if not leave_null:
         _replace_value(owner, _empty_array("{}" if last.key else "[]"))
-    _guard_dash_subblocks(owner.parent)
+    _guard_grammar(owner.parent)
 
 
 def _empty_document(
@@ -1064,7 +1083,7 @@ def set_item_key(item: ArrayItemNode, key: str | StringNode | LiteralNode) -> No
     if array and before:
         before[0][item] = value
         _keep_keys(array, before, keyless=False)
-        _guard_dash_subblocks(array)
+        _guard_grammar(array)
 
 
 # ---- nodes in slots

@@ -19,6 +19,7 @@ from neon import (
     StringNode,
     parse,
 )
+from neon.values import is_integer_key
 
 FIELDS = {
     "set": {"value", "create"},
@@ -143,9 +144,10 @@ def apply_to_model(model: Any, op: dict[str, Any]) -> Any:
             parent.insert(len(parent) if position is None else position, value)
         else:
             entries = list(parent.items())
-            entries.insert(
-                len(entries) if position is None else position, (op["key"], value)
-            )
+            key = op.get("key")
+            if key is None:
+                key = str(max([-1, *(int(k) for k in parent if is_integer_key(k))]) + 1)
+            entries.insert(len(entries) if position is None else position, (key, value))
             parent.clear()
             parent.update(entries)
     elif op["op"] == "remove":

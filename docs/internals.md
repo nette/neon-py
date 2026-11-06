@@ -31,6 +31,9 @@ read side by side. This document covers what is specific to this implementation.
   `Nette\Neon\Parser`: the error messages and positions come from the order in which it looks
   at tokens. Line endings are trivia, but the stream presents a line break before a token as
   the pseudo-kind `Newline`, consumed once per gap.
+- **In an inline array, a value on the line after a key is the value of that key**, unlike in
+  3.x (specification 1.1). It is read once; when a colon follows it, it is handed over as the key
+  of the next item instead of being parsed again.
 - **The block on the line of a dash does not backtrack**: its indentation is a `_PendingIndent`
   decided on the line where the block first compares it.
 - **Positions are code points, which is what a Python `str` is indexed by**, so an offset is an
@@ -71,7 +74,7 @@ read side by side. This document covers what is specific to this implementation.
 - The rest follows `editing.ts` function by function: `replace_node()` and `detach_node()` decide
   by the slot, writing an equal value is a no-op by `values_equal()`, new text comes from
   `encode()` through `Builder`, and every operation that changes an array ends with
-  `_keep_keys()` and `_guard_dash_subblocks()`.
+  `_keep_keys()` and `_guard_grammar()`.
 - A Python `dict` keeps its order, so a host map is compared with the tree in order, and the
   key of a `dict` may be a `str` or an `int` (never a `bool`).
 

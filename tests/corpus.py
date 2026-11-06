@@ -11,7 +11,7 @@ CORPUS = Path(
     os.environ.get("NEON_CORPUS") or Path(__file__).parent / "neon-spec" / "corpus"
 )
 
-SPEC_VERSION = "1.0.0"
+SPEC_VERSION = "1.1.0"
 """The version of the specification this implementation follows."""
 
 HOSTS = ("js", "php", "py")

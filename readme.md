@@ -72,8 +72,9 @@ note: '''
 '''
 ```
 
-JSON is a subset of NEON. The format is described at [ne-on.org](https://ne-on.org) and in the
-[manual](https://doc.nette.org/en/neon/format).
+JSON is a subset of NEON, except for a colon at the start of a line glued to its value
+(`"a"` + new line + `:1`), which NEON reads as a literal. The format is described at
+[ne-on.org](https://ne-on.org) and in the [manual](https://doc.nette.org/en/neon/format).
 
 ▶ Runnable examples: [examples/edge-cases](examples/edge-cases/)
 
